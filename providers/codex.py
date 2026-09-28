@@ -3,13 +3,18 @@ import subprocess
 from config import CODEX_SANDBOX
 
 
-def run_codex(prompt: str, cwd: str) -> str:
+def run_codex(
+    prompt: str,
+    cwd: str,
+    sandbox: str = CODEX_SANDBOX,
+) -> str:
     result = subprocess.run(
         [
             "codex",
             "exec",
+            "--skip-git-repo-check",
             "--sandbox",
-            CODEX_SANDBOX,
+            sandbox,
             prompt,
         ],
         cwd=cwd,

@@ -2,6 +2,8 @@ import os
 
 from openai import OpenAI
 
+import config
+
 
 DEEPSEEK_MODEL = "deepseek-flash"
 

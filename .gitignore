@@ -2,3 +2,5 @@
 .env
 __pycache__/
 *.pyc
+workspace/state.json
+workspace/tasks.json

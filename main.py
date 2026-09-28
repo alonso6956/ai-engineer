@@ -1,12 +1,10 @@
-from dotenv import load_dotenv
 import argparse
 import os
 
+import config
 from providers.qwen import run_qwen
 from providers.codex import run_codex
 from providers.deepseek import run_deepseek
-
-load_dotenv()
 
 def main():
     parser = argparse.ArgumentParser()
