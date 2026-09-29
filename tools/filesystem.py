@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from paths import normalize_path
+
 
 class FileSystem:
     """
@@ -19,10 +21,13 @@ class FileSystem:
     def __init__(
         self,
         project_root: str,
-        allow_test_writes: bool = False,
+        allowed_test_files: list[str] | None = None,
     ):
-        self.root = Path(project_root).resolve()
-        self.allow_test_writes = allow_test_writes
+        self.root = normalize_path(project_root)
+        self.allowed_test_files = {
+            Path(path).as_posix()
+            for path in (allowed_test_files or [])
+        }
 
         if not self.root.exists():
             raise FileNotFoundError(
@@ -51,44 +56,65 @@ class FileSystem:
 
         return target
 
-    def _check_write_permission(self, path: str) -> None:
-        """
-        Bloquea modificaciones a archivos que controlan
-        o alteran la validación de tests.
-        """
+    def _is_test_file(
+        self,
+        relative_path: Path,
+    ) -> bool:
+        name = relative_path.name
 
-        relative = Path(path)
+        return (
+            name.startswith("test_")
+            or name.endswith("_test.py")
+            or "tests" in relative_path.parts
+        )
 
-        protected_names = {
+    def _is_always_protected(
+        self,
+        relative_path: Path,
+    ) -> bool:
+        normalized = relative_path.as_posix()
+
+        protected_files = {
             "conftest.py",
             "pytest.ini",
             "tox.ini",
         }
 
-        protected_directories = {
-            ".git",
-            ".github",
-        }
+        protected_prefixes = (
+            ".git/",
+            ".github/",
+        )
 
-        name = relative.name
+        return (
+            normalized in protected_files
+            or any(
+                normalized.startswith(prefix)
+                for prefix in protected_prefixes
+            )
+        )
 
-        if any(
-            part in protected_directories
-            for part in relative.parts
-        ):
+    def _check_write_permission(self, path: str) -> None:
+        """
+        Bloquea modificaciones a archivos de infraestructura
+        y a tests no autorizados.
+        """
+
+        target = self._resolve(path)
+        relative = target.relative_to(self.root)
+        normalized = relative.as_posix()
+
+        if self._is_always_protected(relative):
             raise PermissionError(
-                f"Directorio protegido: {path}"
+                f"Protected file cannot be modified: {normalized}"
             )
 
-        if not self.allow_test_writes:
-            if (
-                name in protected_names
-                or name.startswith("test_")
-                or name.endswith("_test.py")
-            ):
-                raise PermissionError(
-                    f"No se puede escribir en archivo de test: {path}"
-                )
+        if (
+            self._is_test_file(relative)
+            and normalized not in self.allowed_test_files
+        ):
+            raise PermissionError(
+                f"Test file modification not authorized: {normalized}"
+            )
 
     def read_file(self, path: str) -> str:
         """

@@ -5,6 +5,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from paths import WORKSPACE_DIR, normalize_path
 
 VALID_TASK_STATUSES = {
     "pending",
@@ -32,6 +33,9 @@ class Task:
     acceptance_criteria: list[str] = field(
         default_factory=list
     )
+    allowed_test_files: list[str] = field(
+        default_factory=list
+    )
     status: str = "pending"
     commit_hash: str | None = None
     attempts: int = 0
@@ -53,6 +57,13 @@ class ProjectPlan:
     status: str = "pending"
     current_task_id: str | None = None
     tasks: list[Task] = field(default_factory=list)
+    budget_usage: dict[str, int] = field(
+        default_factory=lambda: {
+            "qwen_calls": 0,
+            "deepseek_calls": 0,
+            "codex_calls": 0,
+        }
+    )
 
     def __post_init__(self) -> None:
         if self.status not in VALID_PLAN_STATUSES:
@@ -63,12 +74,8 @@ class ProjectPlan:
 
 class TaskManager:
     def __init__(self, path: str | None = None):
-        default_path = (
-            Path(__file__).resolve().parents[1]
-            / "workspace"
-            / "tasks.json"
-        )
-        self.path = Path(path) if path else default_path
+        default_path = WORKSPACE_DIR / "tasks.json"
+        self.path = normalize_path(path) if path else default_path
         self.temporary_path = Path(f"{self.path}.tmp")
 
     def load_plan(self) -> ProjectPlan | None:
@@ -114,12 +121,45 @@ class TaskManager:
             self.path,
         )
 
+    def update_budget_usage(
+        self,
+        budget_usage: dict[str, int],
+    ) -> None:
+        plan = self._require_plan()
+
+        required = {
+            "qwen_calls",
+            "deepseek_calls",
+            "codex_calls",
+        }
+
+        if set(budget_usage) != required:
+            raise ValueError(
+                "Invalid plan budget usage fields."
+            )
+
+        if any(
+            not isinstance(value, int) or value < 0
+            for value in budget_usage.values()
+        ):
+            raise ValueError(
+                "Plan budget usage values must be non-negative integers."
+            )
+
+        plan.budget_usage = dict(budget_usage)
+        self.save_plan(plan)
+
     def create_plan(
         self,
         goal: str,
         project_root: str,
         tasks: list[Task],
+        overwrite: bool = False,
     ) -> ProjectPlan:
+        if self.path.exists() and not overwrite:
+            raise FileExistsError(
+                f"A project plan already exists: {self.path}"
+            )
         if not goal.strip():
             raise ValueError("Plan goal cannot be empty.")
         if not tasks:
@@ -144,7 +184,7 @@ class TaskManager:
         plan = ProjectPlan(
             version=1,
             goal=goal,
-            project_root=str(Path(project_root).resolve()),
+            project_root=str(normalize_path(project_root)),
             status="pending",
             current_task_id=None,
             tasks=tasks,

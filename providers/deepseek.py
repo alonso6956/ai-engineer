@@ -5,6 +5,7 @@ from openai import OpenAI
 import config
 
 
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-flash"
 
 
@@ -18,7 +19,7 @@ def run_deepseek(prompt: str) -> str:
 
     client = OpenAI(
         api_key=api_key,
-        base_url="https://api.deepseek.com",
+        base_url=DEEPSEEK_BASE_URL,
     )
 
     response = client.chat.completions.create(

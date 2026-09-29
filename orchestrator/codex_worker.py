@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from paths import normalize_path
 from orchestrator.local_worker import CandidateResult
 from providers.codex import run_codex
 from tools.filesystem import FileSystem
@@ -30,6 +31,8 @@ Rules:
 8. Do not modify files outside the repository.
 9. Run appropriate tests or validation before finishing.
 10. Leave the completed implementation in the working tree.
+11. Run Python tests with PYTHONDONTWRITEBYTECODE=1 python -B -m pytest.
+    Do not create or modify .pyc files or __pycache__ artifacts.
 
 When the implementation is complete, stop.
 """
@@ -41,24 +44,69 @@ class CodexWorker:
         self,
         project_root: str,
         timeout: int = 3600,
+        allowed_test_files: list[str] | None = None,
+        acceptance_criteria: list[str] | None = None,
     ):
         self.project_root = str(
-            Path(project_root).resolve()
+            normalize_path(project_root)
         )
 
         self.timeout = timeout
+        self.acceptance_criteria = list(
+            acceptance_criteria or []
+        )
+        self.allowed_test_files = {
+            Path(path).as_posix()
+            for path in (allowed_test_files or [])
+        }
 
         self.git = GitManager(
             self.project_root
         )
 
         self.fs = FileSystem(
-            self.project_root
+            self.project_root,
+            allowed_test_files=list(
+                self.allowed_test_files
+            ),
         )
 
         self.tests = TestRunner(
             self.project_root
         )
+
+    def _test_permission_prompt(self) -> str:
+        if not self.allowed_test_files:
+            return """
+TEST POLICY:
+- Do not modify, create, rename, or delete test files.
+- Do not modify test infrastructure.
+"""
+
+        allowed = "\n".join(
+            f"- {path}"
+            for path in sorted(self.allowed_test_files)
+        )
+
+        return f"""
+TEST POLICY:
+You may modify ONLY these test files:
+
+{allowed}
+
+No other test files may be modified, created,
+renamed, or deleted.
+
+Never modify test infrastructure including:
+- conftest.py
+- pytest.ini
+- tox.ini
+- .git/
+- .github/
+
+Do not skip, xfail, disable, monkeypatch, intercept,
+or otherwise bypass validation.
+"""
 
     def run_task(
         self,
@@ -82,12 +130,27 @@ class CodexWorker:
             self.git.untracked_files()
         )
 
+        criteria_text = "\n".join(
+            f"- {criterion}"
+            for criterion in self.acceptance_criteria
+        )
+        task_prompt = f"""
+TASK:
+{task}
+
+ACCEPTANCE CRITERIA:
+{criteria_text or "- None specified."}
+
+All acceptance criteria are requirements of the task.
+Do not declare the task complete unless they are satisfied.
+""".strip()
+
         prompt = f"""
 {CODEX_WORKER_PROMPT}
 
-TASK:
+{self._test_permission_prompt()}
 
-{task}
+{task_prompt}
 """
 
         try:
@@ -198,6 +261,32 @@ TASK:
             changed_files=changed_files,
         )
 
+    def _is_test_file(
+        self,
+        path: Path,
+    ) -> bool:
+        return (
+            path.name.startswith("test_")
+            or path.name.endswith("_test.py")
+            or "tests" in path.parts
+        )
+
+    def _is_always_protected(
+        self,
+        path: Path,
+    ) -> bool:
+        normalized = path.as_posix()
+
+        return (
+            normalized in {
+                "conftest.py",
+                "pytest.ini",
+                "tox.ini",
+            }
+            or normalized.startswith(".git/")
+            or normalized.startswith(".github/")
+        )
+
     def _protected_changes(
         self,
         changed_files: list[str],
@@ -205,51 +294,19 @@ TASK:
 
         protected = []
 
-        exact_names = {
-            "conftest.py",
-            "pytest.ini",
-            "tox.ini",
-        }
-
-        protected_directories = {
-            ".git",
-            ".github",
-        }
-
         for file_path in changed_files:
-
             path = Path(file_path)
+            normalized = path.as_posix()
 
-            if path.name in exact_names:
-                protected.append(
-                    file_path
-                )
+            if self._is_always_protected(path):
+                protected.append(file_path)
                 continue
 
             if (
-                path.name.startswith("test_")
-                and path.suffix == ".py"
+                self._is_test_file(path)
+                and normalized not in self.allowed_test_files
             ):
-                protected.append(
-                    file_path
-                )
-                continue
-
-            if (
-                path.name.endswith("_test.py")
-            ):
-                protected.append(
-                    file_path
-                )
-                continue
-
-            if any(
-                part in protected_directories
-                for part in path.parts
-            ):
-                protected.append(
-                    file_path
-                )
+                protected.append(file_path)
 
         return protected
 

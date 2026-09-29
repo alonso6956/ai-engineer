@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from paths import WORKSPACE_DIR, normalize_path
 
 TASK_STATUSES = frozenset({
 	"idle",
@@ -40,7 +41,10 @@ class TaskState:
 	attempts: list[PersistentAttempt]
 	last_candidate: dict[str, Any] | None
 	last_review: dict[str, Any] | None
+	acceptance_criteria: list[str] = field(default_factory=list)
+	allowed_test_files: list[str] = field(default_factory=list)
 	budget_usage: dict[str, int] = field(default_factory=dict)
+	commit_hash: str | None = None
 
 	def __post_init__(self) -> None:
 		if self.status not in TASK_STATUSES:
@@ -59,8 +63,12 @@ class TaskState:
 
 
 class StateManager:
-	def __init__(self, path: str):
-		self.path = Path(path)
+	def __init__(self, path: str | Path | None = None):
+		self.path = (
+			normalize_path(path)
+			if path is not None
+			else WORKSPACE_DIR / "state.json"
+		)
 		self.temporary_path = Path(f"{self.path}.tmp")
 
 	def save(self, state: TaskState) -> None:
@@ -122,6 +130,16 @@ class StateManager:
 			"running",
 			"interrupted",
 		}:
+			return None
+		return state
+
+	def get_completed_task(self) -> TaskState | None:
+		state = self.load()
+		if state is None:
+			return None
+		if state.status != "completed":
+			return None
+		if not state.commit_hash:
 			return None
 		return state
 

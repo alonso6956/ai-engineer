@@ -1,8 +1,9 @@
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from paths import WORKSPACE_DIR, normalize_path
 
 from providers.deepseek import run_deepseek
 from providers.qwen import run_qwen
+from orchestrator.change_policy import ChangePolicy
 from orchestrator.budget import (
     BudgetExceededError,
     BudgetLimits,
@@ -81,9 +82,13 @@ class Scheduler:
         qwen_max_failures: int = 2,
         deepseek_max_failures: int = 1,
         budget_limits: BudgetLimits | None = None,
+        initial_budget_usage: dict[str, int] | None = None,
     ):
-        self.project_root = project_root
+        self.project_root = str(normalize_path(project_root))
         self.max_worker_steps = max_worker_steps
+        self.initial_budget_usage = dict(
+            initial_budget_usage or {}
+        )
         self.budget_limits = (
             budget_limits or BudgetLimits()
         )
@@ -93,17 +98,15 @@ class Scheduler:
             deepseek_max_failures=deepseek_max_failures,
         )
 
+        self.change_policy = ChangePolicy()
+
         self.git = GitManager(
-            project_root
+            self.project_root
         )
         self.fs = FileSystem(
-            project_root
+            self.project_root
         )
-        state_path = (
-            Path(__file__).resolve().parents[1]
-            / "workspace"
-            / "state.json"
-        )
+        state_path = WORKSPACE_DIR / "state.json"
         self.state_manager = StateManager(
             str(state_path)
         )
@@ -177,22 +180,30 @@ class Scheduler:
     def _create_worker(
         self,
         provider: Provider,
+        allowed_test_files: list[str] | None = None,
+        acceptance_criteria: list[str] | None = None,
     ) -> LocalWorker | CodexWorker:
         if provider == Provider.QWEN:
             return LocalWorker(
-                self.project_root,
+                str(self.project_root),
                 max_steps=self.max_worker_steps,
                 model_runner=run_qwen,
+                acceptance_criteria=acceptance_criteria,
+                allowed_test_files=allowed_test_files,
             )
         if provider == Provider.DEEPSEEK:
             return LocalWorker(
-                self.project_root,
+                str(self.project_root),
                 max_steps=self.max_worker_steps,
                 model_runner=run_deepseek,
+                acceptance_criteria=acceptance_criteria,
+                allowed_test_files=allowed_test_files,
             )
         if provider == Provider.CODEX:
             return CodexWorker(
-                self.project_root
+                str(self.project_root),
+                acceptance_criteria=acceptance_criteria,
+                allowed_test_files=allowed_test_files,
             )
         raise ValueError(
             f"Unknown provider: {provider}"
@@ -239,6 +250,19 @@ class Scheduler:
             deepseek_failures,
             codex_failures,
         )
+
+    def _validate_change_policy(
+        self,
+        changed_files: list[str],
+        allowed_test_files: list[str] | None = None,
+    ) -> tuple[bool, str]:
+        result = self.change_policy.validate_changed_files(
+            project_root=str(self.project_root),
+            changed_files=changed_files,
+            allowed_test_files=allowed_test_files,
+        )
+
+        return result.allowed, result.reason
 
     def _rollback(
         self,
@@ -310,8 +334,8 @@ class Scheduler:
                 "for recovery."
             )
 
-        saved_root = Path(state.project_root).resolve()
-        configured_root = Path(self.project_root).resolve()
+        saved_root = normalize_path(state.project_root)
+        configured_root = normalize_path(self.project_root)
         if saved_root != configured_root:
             raise StateRecoveryError(
                 "Saved task belongs to a different project.\n"
@@ -397,13 +421,24 @@ class Scheduler:
         return self._run_loop(
             state=state,
             initial_untracked=initial_untracked,
+            acceptance_criteria=state.acceptance_criteria,
+            allowed_test_files=state.allowed_test_files,
         )
 
     def run_task(
         self,
         task: str,
         commit_message: str,
+        allowed_test_files: list[str] | None = None,
+        acceptance_criteria: list[str] | None = None,
     ) -> TaskResult:
+
+        acceptance_criteria = list(
+            acceptance_criteria or []
+        )
+        allowed_test_files = list(
+            allowed_test_files or []
+        )
 
         if not self.git.is_clean():
             return TaskResult(
@@ -447,10 +482,23 @@ class Scheduler:
             attempts=[],
             last_candidate=None,
             last_review=None,
+            acceptance_criteria=acceptance_criteria,
+            allowed_test_files=list(
+                allowed_test_files or []
+            ),
             budget_usage={
-                "qwen_calls": 0,
-                "deepseek_calls": 0,
-                "codex_calls": 0,
+                "qwen_calls": self.initial_budget_usage.get(
+                    "qwen_calls",
+                    0,
+                ),
+                "deepseek_calls": self.initial_budget_usage.get(
+                    "deepseek_calls",
+                    0,
+                ),
+                "codex_calls": self.initial_budget_usage.get(
+                    "codex_calls",
+                    0,
+                ),
             },
         )
         self.state_manager.save(state)
@@ -458,12 +506,16 @@ class Scheduler:
         return self._run_loop(
             state=state,
             initial_untracked=initial_untracked,
+            acceptance_criteria=acceptance_criteria,
+            allowed_test_files=allowed_test_files,
         )
 
     def _run_loop(
         self,
         state: TaskState,
         initial_untracked: set[str],
+        acceptance_criteria: list[str],
+        allowed_test_files: list[str],
     ) -> TaskResult:
         task = state.task
         commit_message = state.commit_message
@@ -547,7 +599,9 @@ class Scheduler:
                 budget,
             )
             worker = self._create_worker(
-                provider
+                provider,
+                acceptance_criteria=acceptance_criteria,
+                allowed_test_files=allowed_test_files,
             )
             if provider == Provider.CODEX:
                 reviewer = None
@@ -718,6 +772,55 @@ class Scheduler:
                         f"- {path}"
                     )
 
+            policy_ok, policy_reason = (
+                self._validate_change_policy(
+                    candidate.changed_files,
+                    allowed_test_files=allowed_test_files,
+                )
+            )
+
+            if not policy_ok:
+                reason = (
+                    "Deterministic change policy rejected "
+                    f"candidate: {policy_reason}"
+                )
+
+                print(
+                    "\n=== CHANGE POLICY REJECTED ==="
+                )
+                print(reason)
+
+                self._rollback(initial_untracked)
+
+                (
+                    qwen_failures,
+                    deepseek_failures,
+                    codex_failures,
+                ) = self._register_failure(
+                    provider,
+                    qwen_failures,
+                    deepseek_failures,
+                    codex_failures,
+                )
+                state.qwen_failures = qwen_failures
+                state.deepseek_failures = deepseek_failures
+                state.codex_failures = codex_failures
+                self.state_manager.save(state)
+                attempts.append(
+                    AttemptResult(
+                        provider=provider,
+                        success=False,
+                        reason=reason,
+                    )
+                )
+                self._record_attempt(
+                    state=state,
+                    provider=provider,
+                    success=False,
+                    reason=reason,
+                )
+                continue
+
             if reviewer is not None:
                 reviewer_provider = (
                     Provider.DEEPSEEK
@@ -783,8 +886,10 @@ class Scheduler:
 
                 try:
                     review = reviewer.review(
-                        task=task,
-                        candidate=candidate,
+                        state.task,
+                        candidate,
+                        acceptance_criteria=acceptance_criteria,
+                        allowed_test_files=allowed_test_files,
                     )
                 except KeyboardInterrupt:
                     print(
@@ -953,6 +1058,56 @@ class Scheduler:
                 self._rollback(initial_untracked)
                 continue
 
+            final_changed_files = self.git.changed_files()
+            policy_ok, policy_reason = (
+                self._validate_change_policy(
+                    final_changed_files,
+                    allowed_test_files=allowed_test_files,
+                )
+            )
+
+            if not policy_ok:
+                reason = (
+                    "Final deterministic change policy "
+                    f"rejected candidate: {policy_reason}"
+                )
+
+                print(
+                    "\n=== FINAL CHANGE POLICY REJECTED ==="
+                )
+                print(reason)
+
+                self._rollback(initial_untracked)
+
+                (
+                    qwen_failures,
+                    deepseek_failures,
+                    codex_failures,
+                ) = self._register_failure(
+                    provider,
+                    qwen_failures,
+                    deepseek_failures,
+                    codex_failures,
+                )
+                state.qwen_failures = qwen_failures
+                state.deepseek_failures = deepseek_failures
+                state.codex_failures = codex_failures
+                self.state_manager.save(state)
+                attempts.append(
+                    AttemptResult(
+                        provider=provider,
+                        success=False,
+                        reason=reason,
+                    )
+                )
+                self._record_attempt(
+                    state=state,
+                    provider=provider,
+                    success=False,
+                    reason=reason,
+                )
+                continue
+
             add_result = self.git.add_all()
             if not add_result.success:
                 (
@@ -1041,8 +1196,10 @@ class Scheduler:
                     reason="accepted and committed",
                 )
             )
+            state.commit_hash = commit_hash
             state.status = "completed"
-            state.current_provider = provider.value
+            state.current_provider = None
+            self.state_manager.save(state)
             self._record_attempt(
                 state=state,
                 provider=provider,

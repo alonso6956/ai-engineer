@@ -1,6 +1,6 @@
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from paths import normalize_path
 
 
 @dataclass
@@ -33,7 +33,7 @@ class GitManager:
     """
 
     def __init__(self, project_root: str):
-        self.root = Path(project_root).resolve()
+        self.root = normalize_path(project_root)
 
         if not self.root.exists():
             raise FileNotFoundError(

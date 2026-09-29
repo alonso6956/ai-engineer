@@ -1,6 +1,8 @@
+import os
 import subprocess
 
 from config import CODEX_SANDBOX
+from paths import normalize_path
 
 
 def run_codex(
@@ -8,6 +10,8 @@ def run_codex(
     cwd: str,
     sandbox: str = CODEX_SANDBOX,
 ) -> str:
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
         [
             "codex",
@@ -17,7 +21,8 @@ def run_codex(
             sandbox,
             prompt,
         ],
-        cwd=cwd,
+        cwd=str(normalize_path(cwd)),
+        env=environment,
         capture_output=True,
         text=True,
         timeout=3600,

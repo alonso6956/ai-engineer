@@ -76,8 +76,19 @@ class LocalWorker:
         project_root: str,
         max_steps: int = 20,
         model_runner: Callable[[str], str] = run_qwen,
+        allowed_test_files: list[str] | None = None,
+        acceptance_criteria: list[str] | None = None,
     ):
-        self.fs = FileSystem(project_root)
+        self.acceptance_criteria = list(
+            acceptance_criteria or []
+        )
+        self.allowed_test_files = list(
+            allowed_test_files or []
+        )
+        self.fs = FileSystem(
+            project_root,
+            allowed_test_files=self.allowed_test_files,
+        )
         self.tests = TestRunner(project_root)
         self.git = GitManager(project_root)
 
@@ -215,12 +226,25 @@ class LocalWorker:
         # CONVERSATION
         # -------------------------
 
-        conversation = f"""
-{SYSTEM_PROMPT}
+        criteria_text = "\n".join(
+            f"- {criterion}"
+            for criterion in self.acceptance_criteria
+        )
+        task_prompt = f"""
+    TASK:
+    {task}
 
-TASK:
-{task}
-"""
+    ACCEPTANCE CRITERIA:
+    {criteria_text or "- None specified."}
+
+    All acceptance criteria are requirements of the task.
+    Do not declare the task complete unless they are satisfied.
+    """.strip()
+        conversation = f"""
+    {SYSTEM_PROMPT}
+
+    {task_prompt}
+    """
 
         success = False
 

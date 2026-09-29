@@ -1,6 +1,8 @@
+import os
 import subprocess
+import sys
 from dataclasses import dataclass
-from pathlib import Path
+from paths import normalize_path
 
 
 @dataclass
@@ -39,7 +41,7 @@ class TestRunner:
         project_root: str,
         timeout: int = 120,
     ):
-        self.root = Path(project_root).resolve()
+        self.root = normalize_path(project_root)
         self.timeout = timeout
 
         if not self.root.exists():
@@ -67,7 +69,8 @@ class TestRunner:
         """
 
         command = [
-            "python",
+            sys.executable,
+            "-B",
             "-m",
             "pytest",
             "-q",
@@ -86,9 +89,14 @@ class TestRunner:
             command.append(str(target_path))
 
         try:
+            # Validation must not modify tracked bytecode or create new .pyc files.
+            # The environment also applies to Python children started by tests.
+            environment = os.environ.copy()
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
             result = subprocess.run(
                 command,
                 cwd=self.root,
+                env=environment,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,

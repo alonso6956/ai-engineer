@@ -76,7 +76,16 @@ class DeepSeekReviewer:
         self,
         task: str,
         candidate: CandidateResult,
+        acceptance_criteria: list[str] | None = None,
+        allowed_test_files: list[str] | None = None,
     ) -> ReviewResult:
+
+        acceptance_criteria = list(
+            acceptance_criteria or []
+        )
+        allowed_test_files = list(
+            allowed_test_files or []
+        )
 
         if not candidate.success:
             return ReviewResult(
@@ -98,12 +107,46 @@ class DeepSeekReviewer:
         if not changed_files:
             changed_files = "(none)"
 
+        criteria_text = "\n".join(
+            f"- {criterion}"
+            for criterion in acceptance_criteria
+        )
+        criteria_text = criteria_text or "- None specified."
+        allowed_tests_text = "\n".join(
+            f"- {path}"
+            for path in allowed_test_files
+        )
+        if not allowed_tests_text:
+            allowed_tests_text = "- None"
+
         prompt = f"""
 {REVIEW_SYSTEM_PROMPT}
 
 ORIGINAL TASK:
 
 {task}
+
+ACCEPTANCE CRITERIA:
+{criteria_text}
+
+Evaluate the candidate against every acceptance criterion.
+Reject the candidate if any criterion is demonstrably unsatisfied.
+Do not reject solely because a criterion cannot be demonstrated from the diff.
+Use available code, tests, and evidence; do not invent requirements beyond the task and acceptance criteria.
+
+AUTHORIZED TEST FILES:
+{allowed_tests_text}
+
+Test changes are permitted only for the exact files listed above.
+An authorized test-file modification is not, by itself, a reason to reject the candidate.
+Reject test changes outside the authorized list.
+Validation infrastructure such as conftest.py, pytest.ini, tox.ini, .git/*,
+and .github/* must not be modified.
+Reject attempts to weaken, skip, bypass, monkeypatch, or disable validation,
+even inside an authorized test file.
+
+This review is a second layer. ChangePolicy remains the deterministic authority
+for enforcing changed-file permissions.
 
 CHANGED FILES:
 

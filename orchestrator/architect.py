@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from paths import normalize_path
 from orchestrator.task_manager import Task
 
 
@@ -38,9 +39,7 @@ class CodexArchitect:
         project_root: str,
         timeout: int = 3600,
     ):
-        self.project_root = Path(
-            project_root
-        ).resolve()
+        self.project_root = normalize_path(project_root)
 
         self.timeout = timeout
 
@@ -187,6 +186,20 @@ PLANNING RULES:
 
 20. commit_message must be concise and suitable for Git.
 
+21. If a task legitimately requires modifying existing or new test files,
+    list the exact repository-relative paths in allowed_test_files.
+
+22. allowed_test_files grants permission only to those exact test files.
+
+23. Never include validation infrastructure such as:
+    conftest.py
+    pytest.ini
+    tox.ini
+    .git/*
+    .github/*
+
+24. If the task does not require test changes, allowed_test_files must be [].
+
 OUTPUT:
 
 Return ONLY valid JSON.
@@ -206,8 +219,10 @@ Use exactly this structure:
       "commit_message": "Concise commit message",
       "depends_on": [],
       "acceptance_criteria": [
-        "Objective criterion 1",
-        "Objective criterion 2"
+        "Objective criterion 1"
+      ],
+      "allowed_test_files": [
+        "test_calculator.py"
       ]
     }},
     {{
@@ -217,7 +232,8 @@ Use exactly this structure:
       "depends_on": ["task-001"],
       "acceptance_criteria": [
         "Objective criterion 1"
-      ]
+      ],
+      "allowed_test_files": []
     }}
   ]
 }}
@@ -258,6 +274,7 @@ Use exactly this structure:
             )
 
         self._validate_dependencies(tasks)
+        self._validate_test_permissions(tasks)
 
         return ArchitecturePlan(
             summary=data["summary"].strip(),
@@ -365,6 +382,11 @@ Use exactly this structure:
             [],
         )
 
+        allowed_test_files = data.get(
+            "allowed_test_files",
+            [],
+        )
+
         if (
             not isinstance(description, str)
             or not description.strip()
@@ -424,6 +446,25 @@ Use exactly this structure:
                 f"contains invalid values."
             )
 
+        if not isinstance(
+            allowed_test_files,
+            list,
+        ):
+            raise ArchitectError(
+                f"{task_id}.allowed_test_files "
+                f"must be a list."
+            )
+
+        if not all(
+            isinstance(item, str)
+            and item.strip()
+            for item in allowed_test_files
+        ):
+            raise ArchitectError(
+                f"{task_id}.allowed_test_files "
+                f"contains invalid values."
+            )
+
         return Task(
             id=task_id,
             description=description.strip(),
@@ -436,6 +477,10 @@ Use exactly this structure:
                 item.strip()
                 for item
                 in acceptance_criteria
+            ],
+            allowed_test_files=[
+                item.strip()
+                for item in allowed_test_files
             ],
         )
 
@@ -477,6 +522,64 @@ Use exactly this structure:
                 )
 
         self._validate_no_cycles(tasks)
+
+    def _validate_test_permissions(
+        self,
+        tasks: list[Task],
+    ) -> None:
+
+        forbidden_names = {
+            "conftest.py",
+            "pytest.ini",
+            "tox.ini",
+        }
+
+        forbidden_prefixes = (
+            ".git/",
+            ".github/",
+        )
+
+        for task in tasks:
+            seen: set[str] = set()
+
+            for raw_path in task.allowed_test_files:
+                path = Path(raw_path)
+                normalized = path.as_posix()
+
+                if path.is_absolute():
+                    raise ArchitectError(
+                        f"{task.id} contains absolute test "
+                        f"path: {normalized}"
+                    )
+
+                if ".." in path.parts:
+                    raise ArchitectError(
+                        f"{task.id} contains unsafe test "
+                        f"path: {normalized}"
+                    )
+
+                if normalized in forbidden_names:
+                    raise ArchitectError(
+                        f"{task.id} cannot authorize protected "
+                        f"file {normalized}."
+                    )
+
+                if any(
+                    normalized.startswith(prefix)
+                    for prefix in forbidden_prefixes
+                ):
+                    raise ArchitectError(
+                        f"{task.id} cannot authorize protected "
+                        f"path {normalized}."
+                    )
+
+                if normalized in seen:
+                    raise ArchitectError(
+                        f"{task.id} contains duplicate test "
+                        f"permission {normalized}."
+                    )
+
+                seen.add(normalized)
 
     def _validate_no_cycles(
         self,
