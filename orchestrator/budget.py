@@ -9,9 +9,18 @@ class BudgetExceededError(RuntimeError):
 
 @dataclass
 class BudgetLimits:
+	# Keep constructor/serialized names compatible with existing budget data.
 	qwen_calls: int | None = None
 	deepseek_calls: int | None = 3
 	codex_calls: int | None = 1
+
+	@property
+	def local_calls(self) -> int | None:
+		return self.qwen_calls
+
+	@local_calls.setter
+	def local_calls(self, value: int | None) -> None:
+		self.qwen_calls = value
 
 
 @dataclass
@@ -19,6 +28,14 @@ class BudgetUsage:
 	qwen_calls: int = 0
 	deepseek_calls: int = 0
 	codex_calls: int = 0
+
+	@property
+	def local_calls(self) -> int:
+		return self.qwen_calls
+
+	@local_calls.setter
+	def local_calls(self, value: int) -> None:
+		self.qwen_calls = value
 
 
 class BudgetManager:
@@ -31,6 +48,8 @@ class BudgetManager:
 		self.usage = usage or BudgetUsage()
 
 	def _field(self, provider: Provider) -> str:
+		if provider == Provider.LOCAL:
+			return "local_calls"
 		return f"{provider.value}_calls"
 
 	def used(self, provider: Provider) -> int:

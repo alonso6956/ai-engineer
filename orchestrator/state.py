@@ -46,6 +46,15 @@ class TaskState:
 	budget_usage: dict[str, int] = field(default_factory=dict)
 	commit_hash: str | None = None
 
+	@property
+	def local_failures(self) -> int:
+		"""Runtime name; qwen_failures remains the compatible JSON field."""
+		return self.qwen_failures
+
+	@local_failures.setter
+	def local_failures(self, value: int) -> None:
+		self.qwen_failures = value
+
 	def __post_init__(self) -> None:
 		if self.status not in TASK_STATUSES:
 			raise ValueError(

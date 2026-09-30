@@ -2,13 +2,21 @@ import argparse
 import sys
 
 import config
+from cli import workflows
 from paths import normalize_path
 from providers.qwen import run_qwen
+from providers.local import run_local
 from providers.codex import run_codex
 from providers.deepseek import run_deepseek
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        from cli.raphael import RaphaelCLI
+
+        return RaphaelCLI().run()
+
     parser = argparse.ArgumentParser(
         description="Run a provider prompt or implement a goal in an explicit project.",
     )
@@ -16,7 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "provider",
         nargs="?",
-        choices=["qwen", "deepseek", "codex"],
+        choices=["local", "qwen", "deepseek", "codex"],
+        help="Provider to call directly (qwen is a legacy alias for local).",
     )
 
     parser.add_argument("prompt", nargs="?")
@@ -56,60 +65,25 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"Project root is not a directory: {project_root}")
 
     if args.resume:
-        from orchestrator.plan_runner import PlanRunner
         from orchestrator.state import StateRecoveryError
-        from orchestrator.task_manager import TaskManager
-
-        task_manager = TaskManager()
-        plan = task_manager.load_plan()
-        if plan is None:
-            parser.error(f"No saved plan exists at {task_manager.path}.")
-        if normalize_path(plan.project_root) != project_root:
-            parser.error("Saved plan belongs to a different project.")
         try:
-            result = PlanRunner(task_manager).run(
-                retry_failed=True
-            )
-        except StateRecoveryError as error:
+            result = workflows.resume_plan(project_root)
+        except (workflows.WorkflowError, StateRecoveryError) as error:
             parser.error(str(error))
         print(f"Plan status: {result.status}")
         return 0 if result.status == "completed" else 1
 
     if args.goal is not None:
-        from orchestrator.architect import CodexArchitect
-        from orchestrator.plan_runner import PlanRunner
-        from orchestrator.scheduler import Scheduler
-        from orchestrator.task_manager import TaskManager
-
-        task_manager = TaskManager()
-        existing_plan = task_manager.load_plan()
-        if existing_plan is not None and existing_plan.status != "completed":
-            parser.error(
-                f"An unfinished plan exists at {task_manager.path}. "
-                "Use --project PROJECT --resume to continue it."
-            )
-        scheduler = Scheduler(str(project_root))
-        if scheduler.state_manager.has_incomplete_task():
-            parser.error(
-                "An interrupted task exists. Recover it with "
-                "Scheduler(project_root).resume_task() before starting a new goal."
-            )
-        architecture = CodexArchitect(str(project_root)).create_plan(args.goal)
-        task_manager.create_plan(
-            goal=args.goal,
-            project_root=str(project_root),
-            tasks=architecture.tasks,
-            overwrite=(
-                existing_plan is not None
-                and existing_plan.status == "completed"
-            ),
-        )
-        print(architecture.summary)
-        result = PlanRunner(task_manager).run()
+        try:
+            result = workflows.run_goal(project_root, args.goal)
+        except workflows.WorkflowError as error:
+            parser.error(str(error))
         print(f"Plan status: {result.status}")
         return 0 if result.status == "completed" else 1
 
-    if args.provider == "qwen":
+    if args.provider == "local":
+        result = run_local(args.prompt)
+    elif args.provider == "qwen":  # Backward-compatible CLI alias.
         result = run_qwen(args.prompt)
     elif args.provider == "deepseek":
         result = run_deepseek(args.prompt)

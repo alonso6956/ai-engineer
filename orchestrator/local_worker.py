@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
-from providers.qwen import run_qwen
+from providers.local import run_local
 from tools.filesystem import FileSystem
 from tools.tests import TestRunner
 from tools.git import GitManager
@@ -75,7 +75,7 @@ class LocalWorker:
         self,
         project_root: str,
         max_steps: int = 20,
-        model_runner: Callable[[str], str] = run_qwen,
+        model_runner: Callable[[str], str] = run_local,
         allowed_test_files: list[str] | None = None,
         acceptance_criteria: list[str] | None = None,
     ):

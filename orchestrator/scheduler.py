@@ -2,7 +2,7 @@ from dataclasses import asdict, dataclass, field
 from paths import WORKSPACE_DIR, normalize_path
 
 from providers.deepseek import run_deepseek
-from providers.qwen import run_qwen
+from providers.local import run_local
 from orchestrator.change_policy import ChangePolicy
 from orchestrator.budget import (
     BudgetExceededError,
@@ -61,7 +61,7 @@ class Scheduler:
 
         Task
           ↓
-        Qwen Worker
+        Local Worker
           ↓
         CandidateResult
           ↓
@@ -83,6 +83,8 @@ class Scheduler:
         deepseek_max_failures: int = 1,
         budget_limits: BudgetLimits | None = None,
         initial_budget_usage: dict[str, int] | None = None,
+        *,
+        local_max_failures: int | None = None,
     ):
         self.project_root = str(normalize_path(project_root))
         self.max_worker_steps = max_worker_steps
@@ -94,7 +96,7 @@ class Scheduler:
         )
 
         self.router = Router(
-            qwen_max_failures=qwen_max_failures,
+            local_max_failures=(qwen_max_failures if local_max_failures is None else local_max_failures),
             deepseek_max_failures=deepseek_max_failures,
         )
 
@@ -158,7 +160,7 @@ class Scheduler:
         budget: BudgetManager,
     ) -> None:
         state.budget_usage = {
-            "qwen_calls": budget.usage.qwen_calls,
+            "qwen_calls": budget.usage.local_calls,
             "deepseek_calls": budget.usage.deepseek_calls,
             "codex_calls": budget.usage.codex_calls,
         }
@@ -183,11 +185,11 @@ class Scheduler:
         allowed_test_files: list[str] | None = None,
         acceptance_criteria: list[str] | None = None,
     ) -> LocalWorker | CodexWorker:
-        if provider == Provider.QWEN:
+        if provider == Provider.LOCAL:
             return LocalWorker(
                 str(self.project_root),
                 max_steps=self.max_worker_steps,
-                model_runner=run_qwen,
+                model_runner=run_local,
                 acceptance_criteria=acceptance_criteria,
                 allowed_test_files=allowed_test_files,
             )
@@ -216,10 +218,10 @@ class Scheduler:
         """
         Selecciona un reviewer distinto del modelo
         que produjo el candidato.
-        Qwen     -> DeepSeek
+        Local    -> DeepSeek
         DeepSeek -> Codex
         """
-        if worker_provider == Provider.QWEN:
+        if worker_provider == Provider.LOCAL:
             return DeepSeekReviewer()
         if worker_provider == Provider.DEEPSEEK:
             return CodexReviewer()
@@ -235,18 +237,18 @@ class Scheduler:
     def _register_failure(
         self,
         provider: Provider,
-        qwen_failures: int,
+        local_failures: int,
         deepseek_failures: int,
         codex_failures: int,
     ) -> tuple[int, int, int]:
-        if provider == Provider.QWEN:
-            qwen_failures += 1
+        if provider == Provider.LOCAL:
+            local_failures += 1
         elif provider == Provider.DEEPSEEK:
             deepseek_failures += 1
         elif provider == Provider.CODEX:
             codex_failures += 1
         return (
-            qwen_failures,
+            local_failures,
             deepseek_failures,
             codex_failures,
         )
@@ -389,7 +391,7 @@ class Scheduler:
             state.status == "interrupted"
             and active_provider is not None
             and bool(state.attempts)
-            and state.attempts[-1].provider == active_provider.value
+            and Provider(state.attempts[-1].provider) == active_provider
             and state.attempts[-1].reason in {
                 "worker interrupted",
                 "reviewer interrupted",
@@ -399,12 +401,12 @@ class Scheduler:
         )
         if active_provider is not None and not already_recorded:
             (
-                state.qwen_failures,
+                state.local_failures,
                 state.deepseek_failures,
                 state.codex_failures,
             ) = self._register_failure(
                 active_provider,
-                state.qwen_failures,
+                state.local_failures,
                 state.deepseek_failures,
                 state.codex_failures,
             )
@@ -462,7 +464,7 @@ class Scheduler:
                 f"{starting_head_result}"
             )
 
-        qwen_failures = 0
+        local_failures = 0
         deepseek_failures = 0
         codex_failures = 0
         attempts: list[AttemptResult] = []
@@ -476,7 +478,7 @@ class Scheduler:
             commit_message=commit_message,
             starting_head=starting_head_result.stdout.strip(),
             current_provider=None,
-            qwen_failures=0,
+            qwen_failures=0,  # Legacy serialized field for local failures.
             deepseek_failures=0,
             codex_failures=0,
             attempts=[],
@@ -519,7 +521,7 @@ class Scheduler:
     ) -> TaskResult:
         task = state.task
         commit_message = state.commit_message
-        qwen_failures = state.qwen_failures
+        local_failures = state.local_failures
         deepseek_failures = state.deepseek_failures
         codex_failures = state.codex_failures
         budget = self._create_budget(state)
@@ -548,7 +550,7 @@ class Scheduler:
         while True:
             decision = self.router.route(
                 task=task,
-                qwen_failures=qwen_failures,
+                local_failures=local_failures,
                 deepseek_failures=deepseek_failures,
             )
 
@@ -644,16 +646,16 @@ class Scheduler:
                     "rolling back."
                 )
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -683,16 +685,16 @@ class Scheduler:
                     f"{error}"
                 )
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -723,16 +725,16 @@ class Scheduler:
                     "\n=== WORKER FAILED ==="
                 )
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -793,16 +795,16 @@ class Scheduler:
                 self._rollback(initial_untracked)
 
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -824,7 +826,7 @@ class Scheduler:
             if reviewer is not None:
                 reviewer_provider = (
                     Provider.DEEPSEEK
-                    if provider == Provider.QWEN
+                    if provider == Provider.LOCAL
                     else Provider.CODEX
                 )
                 if not budget.can_use(reviewer_provider):
@@ -837,16 +839,16 @@ class Scheduler:
                     )
                     self._rollback(initial_untracked)
                     (
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     ) = self._register_failure(
                         provider,
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     )
-                    state.qwen_failures = qwen_failures
+                    state.local_failures = local_failures
                     state.deepseek_failures = deepseek_failures
                     state.codex_failures = codex_failures
                     state.status = "failed"
@@ -897,16 +899,16 @@ class Scheduler:
                         "rolling back."
                     )
                     (
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     ) = self._register_failure(
                         provider,
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     )
-                    state.qwen_failures = qwen_failures
+                    state.local_failures = local_failures
                     state.deepseek_failures = deepseek_failures
                     state.codex_failures = codex_failures
                     self.state_manager.save(state)
@@ -936,16 +938,16 @@ class Scheduler:
                         f"{error}"
                     )
                     (
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     ) = self._register_failure(
                         provider,
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     )
-                    state.qwen_failures = qwen_failures
+                    state.local_failures = local_failures
                     state.deepseek_failures = deepseek_failures
                     state.codex_failures = codex_failures
                     self.state_manager.save(state)
@@ -988,16 +990,16 @@ class Scheduler:
                         "\n=== CANDIDATE REJECTED ==="
                     )
                     (
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     ) = self._register_failure(
                         provider,
-                        qwen_failures,
+                        local_failures,
                         deepseek_failures,
                         codex_failures,
                     )
-                    state.qwen_failures = qwen_failures
+                    state.local_failures = local_failures
                     state.deepseek_failures = deepseek_failures
                     state.codex_failures = codex_failures
                     self.state_manager.save(state)
@@ -1029,16 +1031,16 @@ class Scheduler:
                     "Rolling back."
                 )
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -1080,16 +1082,16 @@ class Scheduler:
                 self._rollback(initial_untracked)
 
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -1111,16 +1113,16 @@ class Scheduler:
             add_result = self.git.add_all()
             if not add_result.success:
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)
@@ -1148,16 +1150,16 @@ class Scheduler:
             commit_result = self.git.commit(commit_message)
             if not commit_result.success:
                 (
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 ) = self._register_failure(
                     provider,
-                    qwen_failures,
+                    local_failures,
                     deepseek_failures,
                     codex_failures,
                 )
-                state.qwen_failures = qwen_failures
+                state.local_failures = local_failures
                 state.deepseek_failures = deepseek_failures
                 state.codex_failures = codex_failures
                 self.state_manager.save(state)

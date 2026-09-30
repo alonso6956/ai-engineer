@@ -1,5 +1,6 @@
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from paths import normalize_path
 
 
@@ -55,9 +56,13 @@ class GitManager:
             )
 
     def _run(self, args: list[str]) -> GitResult:
+        return self._run_in(self.root, args)
+
+    @staticmethod
+    def _run_in(root: Path, args: list[str]) -> GitResult:
         result = subprocess.run(
             ["git", *args],
-            cwd=self.root,
+            cwd=root,
             capture_output=True,
             text=True,
             timeout=60,
@@ -69,6 +74,15 @@ class GitManager:
             stdout=result.stdout,
             stderr=result.stderr,
         )
+
+    @classmethod
+    def initialize(cls, project_root: str) -> "GitManager":
+        """Initialize a repository in an existing directory, then validate it."""
+        root = normalize_path(project_root)
+        result = cls._run_in(root, ["init"])
+        if not result.success:
+            raise RuntimeError(f"Git initialization failed:\n{result}")
+        return cls(str(root))
 
     def status(self) -> GitResult:
         return self._run([

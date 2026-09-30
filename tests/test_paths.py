@@ -247,6 +247,7 @@ def test_plan_runner_accepts_home_path(project, tmp_path, monkeypatch):
     result = TaskResult(True, "Done", None, None, "abc123")
     with patch("orchestrator.plan_runner.Scheduler") as scheduler:
         scheduler.return_value.state_manager.get_incomplete_task.return_value = None
+        scheduler.return_value.state_manager.load.return_value = None
         scheduler.return_value.run_task.return_value = result
         assert PlanRunner(manager).run().status == "completed"
         assert scheduler.call_args.kwargs["project_root"] == str(project)
@@ -286,7 +287,7 @@ def test_goal_cli_creates_and_executes_plan(project, tmp_path, monkeypatch, isol
         with patch.object(Scheduler, "run_task", return_value=result) as run:
             assert main.main(["--project", os.path.relpath(project, tmp_path), "--goal", "Goal"]) == 0
     architect.assert_called_once_with("Goal")
-    run.assert_called_once_with(task="Work", commit_message="Commit", allowed_test_files=[])
+    run.assert_called_once_with(task="Work", commit_message="Commit", acceptance_criteria=[], allowed_test_files=[])
     plan = TaskManager().load_plan()
     assert plan.project_root == str(project)
     assert plan.status == "completed"
@@ -308,7 +309,7 @@ def test_cli_does_not_overwrite_recovery_data(project, isolated_workspace, saved
     assert saved_file.read_bytes() == before
 
 
-@pytest.mark.parametrize("provider", ["qwen", "deepseek", "codex"])
+@pytest.mark.parametrize("provider", ["local", "qwen", "deepseek", "codex"])
 def test_provider_cli_compatibility(project, provider):
     arguments = [provider, "Prompt"]
     if provider == "codex":
@@ -374,7 +375,7 @@ def test_interrupted_plan_resumes_checkpoint_and_remaining_tasks(project, isolat
 
     executions = []
 
-    def finish(scheduler, state, initial_untracked, allowed_test_files):
+    def finish(scheduler, state, initial_untracked, acceptance_criteria, allowed_test_files):
         executions.append((state.task, state.qwen_failures, dict(state.budget_usage), allowed_test_files))
         state.status = "completed"
         scheduler.state_manager.save(state)
