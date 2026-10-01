@@ -12,7 +12,15 @@ from providers.deepseek import run_deepseek
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv:
+    if argv == ["--tui"] or (not argv and sys.stdin.isatty() and sys.stdout.isatty()):
+        try:
+            from cli.tui import RaphaelApp
+        except ImportError as error:
+            print(f"TUI dependency unavailable: {error}. Install requirements.txt or use --classic.", file=sys.stderr)
+            return 1
+        RaphaelApp().run()
+        return 0
+    if not argv or argv == ["--classic"]:
         from cli.raphael import RaphaelCLI
 
         return RaphaelCLI().run()

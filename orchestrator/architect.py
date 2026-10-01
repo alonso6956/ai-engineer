@@ -1,4 +1,5 @@
 from __future__ import annotations
+from orchestrator.events import activity
 
 import json
 import subprocess
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from paths import normalize_path
+from providers.codex import model_arguments, codex_failure
 from orchestrator.task_manager import Task
 
 
@@ -55,6 +57,7 @@ class CodexArchitect:
                 f"{self.project_root}"
             )
 
+    @activity('Codex architect')
     def create_plan(
         self,
         goal: str,
@@ -71,6 +74,7 @@ class CodexArchitect:
             [
                 "codex",
                 "exec",
+                *model_arguments(),
                 "--skip-git-repo-check",
                 "--sandbox",
                 "read-only",
@@ -84,8 +88,7 @@ class CodexArchitect:
 
         if result.returncode != 0:
             raise ArchitectError(
-                "Codex architect failed.\n\n"
-                f"STDERR:\n{result.stderr}"
+                codex_failure("Codex architect failed", result.stderr)
             )
 
         return self._parse_response(

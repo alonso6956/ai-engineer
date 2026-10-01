@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,7 @@ class GitManager:
                 f"No es un repositorio Git: {self.root}"
             )
 
+    @activity('Git')
     def _run(self, args: list[str]) -> GitResult:
         return self._run_in(self.root, args)
 

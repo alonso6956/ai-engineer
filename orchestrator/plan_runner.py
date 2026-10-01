@@ -1,3 +1,6 @@
+import json
+from dataclasses import asdict
+from orchestrator.events import emit
 from paths import normalize_path
 
 from orchestrator.budget import BudgetLimits
@@ -74,6 +77,7 @@ class PlanRunner:
             )
             checkpoint = scheduler.state_manager.get_incomplete_task()
             completed_checkpoint = scheduler.state_manager.get_completed_task()
+            emit("status", f"Task {task.id}: {task.description}")
             if task.status == "running":
                 if checkpoint is None:
                     if completed_checkpoint is None:
@@ -149,6 +153,8 @@ class PlanRunner:
                 )
 
             if not result.success or result.commit_hash is None:
+                detail = json.dumps({"task": task.id, "message": result.message, "attempts": [asdict(a) for a in result.attempts], "review": asdict(result.review) if result.review else None, "tests": result.candidate.tests_output if result.candidate else None}, ensure_ascii=False, indent=2)
+                emit("request_failed", f"Task {task.id}: {result.message}", detail)
                 self.task_manager.fail_task(task.id)
                 return self.task_manager.load()
 

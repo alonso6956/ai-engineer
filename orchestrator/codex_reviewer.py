@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 import json
 import tempfile
 from pathlib import Path
@@ -63,6 +64,7 @@ Do not include text outside the JSON object.
 
 class CodexReviewer:
 
+    @activity('Codex review')
     def review(
         self,
         task: str,

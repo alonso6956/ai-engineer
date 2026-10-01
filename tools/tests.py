@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 import os
 import subprocess
 import sys
@@ -54,6 +55,7 @@ class TestRunner:
                 f"La ruta no es un directorio: {self.root}"
             )
 
+    @activity('pytest')
     def run_pytest(
         self,
         target: str | None = None,

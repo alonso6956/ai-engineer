@@ -18,3 +18,6 @@ QWEN_URL = LOCAL_MODEL_BASE_URL
 QWEN_MODEL = LOCAL_MODEL_NAME
 
 CODEX_SANDBOX = "workspace-write"
+
+# Optional per-Raphael override; never changes ~/.codex/config.toml.
+CODEX_MODEL = os.getenv("CODEX_MODEL", "").strip()

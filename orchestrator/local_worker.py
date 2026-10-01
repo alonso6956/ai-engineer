@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 import json
 from dataclasses import dataclass
 from typing import Callable
@@ -184,6 +185,7 @@ class LocalWorker:
             f"Unknown action: {action}"
         )
 
+    @activity('Worker')
     def run(
         self,
         task: str,

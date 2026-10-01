@@ -36,7 +36,11 @@ def run_goal(project_root: str | Path, goal: str) -> ProjectPlan:
         tasks=architecture.tasks,
         overwrite=(existing_plan is not None and existing_plan.status == "completed"),
     )
-    print(architecture.summary)
+    from orchestrator.events import emit, sink
+    if sink.get() is None:
+        print(architecture.summary)
+    else:
+        emit("message", architecture.summary)
     return PlanRunner(task_manager).run()
 
 

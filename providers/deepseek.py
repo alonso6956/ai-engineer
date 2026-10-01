@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 
 import config
+from orchestrator.events import emit, streaming
 
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -38,7 +39,19 @@ def run_deepseek(prompt: str) -> str:
                 "content": prompt,
             },
         ],
-        stream=False,
+        stream=streaming.get(),
     )
 
+    if streaming.get():
+        emit("stream_start", "DeepSeek")
+        chunks = []
+        try:
+            for item in response:
+                chunk = item.choices[0].delta.content if item.choices else None
+                if chunk:
+                    chunks.append(chunk)
+                    emit("delta", chunk)
+            return "".join(chunks)
+        finally:
+            response.close()
     return response.choices[0].message.content

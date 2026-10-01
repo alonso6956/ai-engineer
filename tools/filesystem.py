@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 from pathlib import Path
 
 from paths import normalize_path
@@ -116,6 +117,7 @@ class FileSystem:
                 f"Test file modification not authorized: {normalized}"
             )
 
+    @activity('Read')
     def read_file(self, path: str) -> str:
         """
         Lee un archivo de texto dentro del proyecto.
@@ -138,6 +140,7 @@ class FileSystem:
             errors="replace",
         )
 
+    @activity('Write')
     def write_file(
         self,
         path: str,
@@ -161,6 +164,7 @@ class FileSystem:
             encoding="utf-8",
         )
 
+    @activity('List')
     def list_files(
         self,
         path: str = ".",
@@ -200,6 +204,7 @@ class FileSystem:
 
         return results
 
+    @activity('Tree')
     def tree(
         self,
         path: str = ".",

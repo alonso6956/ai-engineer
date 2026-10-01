@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 import json
 from dataclasses import dataclass
 
@@ -72,6 +73,7 @@ Do not include text outside the JSON object.
 
 class DeepSeekReviewer:
 
+    @activity('DeepSeek review')
     def review(
         self,
         task: str,

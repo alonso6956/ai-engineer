@@ -1,3 +1,4 @@
+from orchestrator.events import activity
 from pathlib import Path
 
 from paths import normalize_path
@@ -108,6 +109,7 @@ Do not skip, xfail, disable, monkeypatch, intercept,
 or otherwise bypass validation.
 """
 
+    @activity('Codex worker')
     def run_task(
         self,
         task: str,

@@ -1,11 +1,41 @@
 # AI Engineer
 
-## RAPHAEL — interfaz interactiva
+## RAPHAEL — TUI Textual
 
-Sin argumentos, la entrada abre una sesión de terminal persistente:
+En una terminal macOS/Linux, `python main.py` abre la TUI con selector visual de
+proyecto, rutas con autocompletado, recientes, editor multilínea, conversación
+con scroll, acciones expandibles y cancelación. Instala las dependencias:
 
 ```bash
-python3 main.py
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py --tui
+```
+
+Enter inserta una línea; **Ctrl+S envía**, Ctrl+C cancela, Ctrl+Q sale,
+Ctrl+O selecciona proyecto y Ctrl+P abre la paleta. `/project`, `/new`, `/model`,
+`/status`, `/context`, `/plan`, `/budget`, `/resume`, `/git`, `/tests`, `/clear`,
+`/help` y `/quit` tienen comportamiento real. `/model` cambia el ID local de la
+sesión. `/model codex <id>` cambia el modelo usado por arquitecto, worker y
+revisor Codex; `CODEX_MODEL` en `.env` lo configura al iniciar, sin modificar
+`~/.codex/config.toml`. No se inventan métricas de contexto. Streaming local/DeepSeek aparece
+como respuesta JSON expandible; Codex entrega el resultado al terminar.
+
+`/diagnostics [id]` muestra la petición, etapas y causas; `/requests` lista
+registros anteriores y `/retry` recupera el objetivo como borrador sin ejecutarlo.
+Cada operación guarda eventos y log propios. Los fallos permanecen como Failed
+y la barra muestra el tiempo transcurrido mientras trabaja.
+
+La arquitectura, archivos, pruebas, shortcuts y limitaciones se describen en
+[la entrega de la TUI](docs/TUI.md). El backend conserva el plan global y las
+reglas de recuperación existentes.
+
+## RAPHAEL — modo clásico
+
+Con `--classic`, la entrada abre la sesión anterior (también sin argumentos
+cuando stdin/stdout están redirigidos):
+
+```bash
+python3 main.py --classic
 ```
 
 ```text
@@ -41,7 +71,7 @@ consulta muestran el plan global de `workspace`, identificado por su ruta,
 incluso si pertenece a otro proyecto. Seleccionar otro repositorio no borra ni
 reemplaza ese plan. `/resume` exige que el proyecto seleccionado coincida.
 Las operaciones son síncronas: no se aceptan nuevos comandos mientras el motor
-trabaja. Esta versión no incluye una TUI de pantalla completa ni historial
+trabaja. El modo clásico no incluye una TUI de pantalla completa ni historial
 persistente; las terminales estrechas o sin Unicode usan una presentación simple.
 
 `cli/raphael.py` gestiona la sesión, `cli/display.py` presenta la información y

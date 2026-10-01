@@ -1,3 +1,4 @@
+from orchestrator.events import checkpoint_transaction, emit
 from dataclasses import asdict, dataclass, field
 from paths import WORKSPACE_DIR, normalize_path
 
@@ -595,6 +596,7 @@ class Scheduler:
                     attempts=attempts,
                 )
 
+            emit("status", f"Provider: {provider.value} · calls {budget.used(provider)}/{budget.limit(provider)}")
             budget.consume(provider)
             self._save_budget(
                 state,
@@ -1110,127 +1112,128 @@ class Scheduler:
                 )
                 continue
 
-            add_result = self.git.add_all()
-            if not add_result.success:
-                (
-                    local_failures,
-                    deepseek_failures,
-                    codex_failures,
-                ) = self._register_failure(
-                    provider,
-                    local_failures,
-                    deepseek_failures,
-                    codex_failures,
-                )
-                state.local_failures = local_failures
-                state.deepseek_failures = deepseek_failures
-                state.codex_failures = codex_failures
-                self.state_manager.save(state)
-                attempts.append(
-                    AttemptResult(
+            with checkpoint_transaction():
+                add_result = self.git.add_all()
+                if not add_result.success:
+                    (
+                        local_failures,
+                        deepseek_failures,
+                        codex_failures,
+                    ) = self._register_failure(
+                        provider,
+                        local_failures,
+                        deepseek_failures,
+                        codex_failures,
+                    )
+                    state.local_failures = local_failures
+                    state.deepseek_failures = deepseek_failures
+                    state.codex_failures = codex_failures
+                    self.state_manager.save(state)
+                    attempts.append(
+                        AttemptResult(
+                            provider=provider,
+                            success=False,
+                            reason="git add failed",
+                        )
+                    )
+                    self._record_attempt(
+                        state=state,
                         provider=provider,
                         success=False,
                         reason="git add failed",
                     )
-                )
-                self._record_attempt(
-                    state=state,
-                    provider=provider,
-                    success=False,
-                    reason="git add failed",
-                )
-                self._rollback(initial_untracked)
-                state.status = "failed"
-                self.state_manager.save(state)
-                raise RuntimeError(
-                    "git add failed:\n"
-                    f"{add_result}"
-                )
+                    self._rollback(initial_untracked)
+                    state.status = "failed"
+                    self.state_manager.save(state)
+                    raise RuntimeError(
+                        "git add failed:\n"
+                        f"{add_result}"
+                    )
 
-            commit_result = self.git.commit(commit_message)
-            if not commit_result.success:
-                (
-                    local_failures,
-                    deepseek_failures,
-                    codex_failures,
-                ) = self._register_failure(
-                    provider,
-                    local_failures,
-                    deepseek_failures,
-                    codex_failures,
-                )
-                state.local_failures = local_failures
-                state.deepseek_failures = deepseek_failures
-                state.codex_failures = codex_failures
-                self.state_manager.save(state)
-                attempts.append(
-                    AttemptResult(
+                commit_result = self.git.commit(commit_message)
+                if not commit_result.success:
+                    (
+                        local_failures,
+                        deepseek_failures,
+                        codex_failures,
+                    ) = self._register_failure(
+                        provider,
+                        local_failures,
+                        deepseek_failures,
+                        codex_failures,
+                    )
+                    state.local_failures = local_failures
+                    state.deepseek_failures = deepseek_failures
+                    state.codex_failures = codex_failures
+                    self.state_manager.save(state)
+                    attempts.append(
+                        AttemptResult(
+                            provider=provider,
+                            success=False,
+                            reason="git commit failed",
+                        )
+                    )
+                    self._record_attempt(
+                        state=state,
                         provider=provider,
                         success=False,
                         reason="git commit failed",
                     )
+                    self._rollback(initial_untracked)
+                    state.status = "failed"
+                    self.state_manager.save(state)
+                    raise RuntimeError(
+                        "git commit failed:\n"
+                        f"{commit_result}"
+                    )
+
+                head_result = self.git.head()
+                if not head_result.success:
+                    raise RuntimeError(
+                        "Commit was created but HEAD could not be retrieved."
+                    )
+
+                commit_hash = head_result.stdout.strip()
+                attempts.append(
+                    AttemptResult(
+                        provider=provider,
+                        success=True,
+                        reason="accepted and committed",
+                    )
                 )
+                state.commit_hash = commit_hash
+                state.status = "completed"
+                state.current_provider = None
+                self.state_manager.save(state)
                 self._record_attempt(
                     state=state,
-                    provider=provider,
-                    success=False,
-                    reason="git commit failed",
-                )
-                self._rollback(initial_untracked)
-                state.status = "failed"
-                self.state_manager.save(state)
-                raise RuntimeError(
-                    "git commit failed:\n"
-                    f"{commit_result}"
-                )
-
-            head_result = self.git.head()
-            if not head_result.success:
-                raise RuntimeError(
-                    "Commit was created but HEAD could not be retrieved."
-                )
-
-            commit_hash = head_result.stdout.strip()
-            attempts.append(
-                AttemptResult(
                     provider=provider,
                     success=True,
                     reason="accepted and committed",
                 )
-            )
-            state.commit_hash = commit_hash
-            state.status = "completed"
-            state.current_provider = None
-            self.state_manager.save(state)
-            self._record_attempt(
-                state=state,
-                provider=provider,
-                success=True,
-                reason="accepted and committed",
-            )
 
-            print(
-                "\n=== TASK COMPLETED ==="
-            )
-            print(
-                f"Commit: {commit_hash}"
-            )
-
-            if review is None:
-                message = (
-                    "Task completed, validated and committed."
+                print(
+                    "\n=== TASK COMPLETED ==="
                 )
-            else:
-                message = (
-                    "Task completed, reviewed, validated "
-                    "and committed."
+                print(
+                    f"Commit: {commit_hash}"
                 )
 
-            return TaskResult(
-                success=True,
-                message=message,
-                candidate=candidate,
-                review=review,
-                commit_hash=commit_hash,
-                attempts=attempts,
-            )
+                if review is None:
+                    message = (
+                        "Task completed, validated and committed."
+                    )
+                else:
+                    message = (
+                        "Task completed, reviewed, validated "
+                        "and committed."
+                    )
+
+                return TaskResult(
+                    success=True,
+                    message=message,
+                    candidate=candidate,
+                    review=review,
+                    commit_hash=commit_hash,
+                    attempts=attempts,
+                )
